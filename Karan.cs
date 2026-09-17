@@ -1,12 +1,14 @@
 using CG1.Application.DTO;
 using CG1.Application.Interfaces;
 using CG1.Domain.Entities.HRMS;
+using System.Collections.Concurrent;
 
 namespace CG1.Application.Services;
 
 public class SkillService : ISkillService
 {
     private readonly IUnitOfWork _unitOfWork;
+    private static readonly ConcurrentDictionary<string, int> _statusIdCache = new();
 
     public SkillService(IUnitOfWork unitOfWork)
     {
@@ -48,8 +50,8 @@ public class SkillService : ISkillService
 
     //NEW Services
     public async Task<IReadOnlyList<SkillManagementDto>> GetSkillsByStatusAsync(
-    string? status,
-    CancellationToken cancellationToken = default)
+        string? status,
+        CancellationToken cancellationToken = default)
     {
         int? statusId = null;
 
@@ -71,7 +73,7 @@ public class SkillService : ISkillService
             .GetSkillsByStatusAsync(statusId, cancellationToken);
     }
 
-    public async Task<SkillManagementDto    ?> GetSkillForManagementAsync(
+    public async Task<SkillManagementDto?> GetSkillForManagementAsync(
         int id,
         CancellationToken cancellationToken = default)
     {
@@ -80,26 +82,18 @@ public class SkillService : ISkillService
     }
 
     public async Task CreateSkillForManagementAsync(
-    string description,
-    string? createdBy,
-    CancellationToken cancellationToken = default)
+        string description,
+        string? createdBy,
+        CancellationToken cancellationToken = default)
     {
-        await _unitOfWork.BeginTransactionAsync();
-
-        try
+        await ExecuteInTransactionAsync(async () =>
         {
-            var activeStatus = await _unitOfWork.StatusRepository
-                .GetByNameAsync("Active", cancellationToken);
-
-            if (activeStatus == null)
-            {
-                throw new Exception("Active status not found.");
-            }
+            var activeStatusId = await GetStatusIdOrThrowAsync("Active", cancellationToken);
 
             var skill = new Skill
             {
                 Description = description,
-                StatusId = activeStatus.Id,
+                StatusId = activeStatusId,
                 CreatedBy = createdBy,
                 ModifiedBy = createdBy,
                 DateCreated = DateTime.UtcNow,
@@ -110,35 +104,19 @@ public class SkillService : ISkillService
                 .CreateSkillForManagementAsync(skill, cancellationToken);
 
             await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-            await _unitOfWork.CommitAsync();
-        }
-        catch
-        {
-            await _unitOfWork.RollBackAsync();
-            throw;
-        }
+        }, cancellationToken);
     }
 
     public async Task UpdateSkillForManagementAsync(
-    int id,
-    string? description,
-    string? status,
-    string? modifiedBy,
-    CancellationToken cancellationToken = default)
+        int id,
+        string? description,
+        string? status,
+        string? modifiedBy,
+        CancellationToken cancellationToken = default)
     {
-        await _unitOfWork.BeginTransactionAsync();
-
-        try
+        await ExecuteInTransactionAsync(async () =>
         {
-            var skill = await _unitOfWork.SkillRepository
-                .GetSkillEntityForManagementAsync(id, cancellationToken);
-
-            if (skill == null)
-            {
-                throw new KeyNotFoundException(
-                    $"Skill with ID {id} not found.");
-            }
+            var skill = await GetSkillEntityOrThrowAsync(id, cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(description))
             {
@@ -147,16 +125,8 @@ public class SkillService : ISkillService
 
             if (!string.IsNullOrWhiteSpace(status))
             {
-                var statusEntity = await _unitOfWork.StatusRepository
-                    .GetByNameAsync(status, cancellationToken);
-
-                if (statusEntity == null)
-                {
-                    throw new KeyNotFoundException(
-                        $"Status '{status}' not found.");
-                }
-
-                skill.StatusId = statusEntity.Id;
+                var statusId = await GetStatusIdOrThrowAsync(status, cancellationToken);
+                skill.StatusId = statusId;
             }
 
             skill.ModifiedBy = modifiedBy;
@@ -166,58 +136,10 @@ public class SkillService : ISkillService
                 .UpdateSkillForManagementAsync(skill, cancellationToken);
 
             await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-            await _unitOfWork.CommitAsync();
-        }
-        catch
-        {
-            await _unitOfWork.RollBackAsync();
-            throw;
-        }
+        }, cancellationToken);
     }
 
     // Soft delete is being handled directly in the service layer as this is pure business logic
     public async Task SoftDeleteSkillAsync(
-     int id,
-     string? modifiedBy,
-     CancellationToken cancellationToken = default)
-    {
-        await _unitOfWork.BeginTransactionAsync();
-
-        try
-        {
-            var inactiveStatus = await _unitOfWork.StatusRepository
-                .GetByNameAsync("Inactive", cancellationToken);
-
-            if (inactiveStatus == null)
-            {
-                throw new Exception("Inactive status not found.");
-            }
-
-            var skill = await _unitOfWork.SkillRepository
-                .GetSkillEntityForManagementAsync(id, cancellationToken);
-
-            if (skill == null)
-            {
-                throw new KeyNotFoundException(
-                    $"Skill with ID {id} not found.");
-            }
-
-            skill.StatusId = inactiveStatus.Id;
-            skill.ModifiedBy = modifiedBy;
-            skill.DateModified = DateTime.UtcNow;
-
-            await _unitOfWork.SkillRepository
-                .UpdateSkillForManagementAsync(skill, cancellationToken);
-
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-            await _unitOfWork.CommitAsync();
-        }
-        catch
-        {
-            await _unitOfWork.RollBackAsync();
-            throw;
-        }
-    }
-}
+        int id,
+        string? modified
